@@ -1,0 +1,374 @@
+rm(list=ls())
+library(dplyr)
+#install.packages("EnvStats")
+library(EnvStats)
+data <- read.csv("C:/Users/alexw/Downloads/ScanRecords.csv")
+
+# Get data seperated for type 1 and type 2 patients -----------------------
+
+sorted_df <- data %>%
+  arrange(PatientType)
+patient1_data <- sorted_df[1:379,] 
+patient2_data <- sorted_df[380:nrow(sorted_df), ]
+
+
+# Seperate data into workingdays --------------------------------------------
+
+patient1_data$Date <- as.Date(patient1_data$Date)
+patient1_data$DayOfWeek <- weekdays(patient1_data$Date)
+patient2_data$Date <- as.Date(patient2_data$Date)
+patient2_data$DayOfWeek <- weekdays(patient2_data$Date)
+
+# Filter data for each day of the week (assuming the data includes only weekdays as requested)
+monday_data1 <- patient1_data[patient1_data$DayOfWeek == "maandag", ]
+tuesday_data1 <- patient1_data[patient1_data$DayOfWeek == "dinsdag", ]
+wednesday_data1 <- patient1_data[patient1_data$DayOfWeek == "woensdag", ]
+thursday_data1 <- patient1_data[patient1_data$DayOfWeek == "donderdag", ]
+friday_data1 <- patient1_data[patient1_data$DayOfWeek == "vrijdag", ]
+monday_data2 <- patient1_data[patient2_data$DayOfWeek == "maandag", ]
+tuesday_data2 <- patient1_data[patient2_data$DayOfWeek == "dinsdag", ]
+wednesday_data2 <- patient1_data[patient2_data$DayOfWeek == "woensdag", ]
+thursday_data2 <- patient1_data[patient2_data$DayOfWeek == "donderdag", ]
+friday_data2 <- patient1_data[patient2_data$DayOfWeek == "vrijdag", ]
+
+
+# Calculate the number of calls per day
+calculate_calls_per_day <- function(data) {
+  data %>%
+    group_by(Date) %>%
+    summarise(Count = n())
+}
+
+# Add the call count to each day's data
+patient1_data <- patient1_data %>%
+  left_join(calculate_calls_per_day(patient1_data), by = "Date")
+
+patient2_data <- patient2_data %>%
+  left_join(calculate_calls_per_day(patient2_data), by = "Date")
+
+
+calculate_means_with_calls <- function(data, patient_type) {
+  data %>%
+    group_by(DayOfWeek) %>%
+    summarise(Mean_Duration = mean(Duration, na.rm = TRUE),
+              Mean_Count = mean(Count, na.rm = TRUE),
+              Patient_Type = patient_type) %>%
+    arrange(match(DayOfWeek, c("maandag", "dinsdag", "woensdag", "donderdag", "vrijdag")))
+}
+
+
+means_type1 <- calculate_means_with_calls(patient1_data, "Type 1")
+means_type2 <- calculate_means_with_calls(patient2_data, "Type 2")
+combined_means <- bind_rows(means_type1, means_type2)
+print(combined_means)
+#From this we can state that the average duration seems to be evenly spread out over the five 
+#working days per patient type. Moreover, also the number of calls seems to be evenly spread 
+#out over the five working days per patient type. The only thing that is noticeable is that 
+#Mondaya have on average a little less calls for patient 1 than the rest of the working days
+
+
+# Type 1 patient (parametric estimation) ----------------------------------------------------------
+
+# Duration (Get the duration parameters in the Normal) ----------------------------------------------------------------
+
+# Create the histogram of the sample which is an approximation for the population. It looks normal
+hist(patient1_data[,3], prob = TRUE, col = "lightblue",border = "black",xlab = "Values", main = "Histogram with Normal Curve")  
+x <- seq(min(patient1_data[,3]), max(patient1_data[,3]), length = 1000)
+lines(x, dnorm(x, mean = mean(patient1_data[,3]), sd = sd(patient1_data[,3])), col = "red", lwd = 2)             
+
+
+# 95% confidence intervals around mu and sigma in the normal distri. for the duration
+B <- 999              
+n <- length(patient1_data[, 3])  
+boot_samples <- replicate(B, rnorm(n, mean(patient1_data[,3]), sd(patient1_data[,3])))
+boot_means1 <- apply(boot_samples, 2, mean)
+boot_sds1 <- apply(boot_samples, 2, sd)
+ci_mu <- quantile(boot_means1, c(0.025, 0.975))
+ci_sigma <- quantile(boot_sds1, c(0.025, 0.975))
+print(ci_mu)
+print(ci_sigma)
+
+# Generate a new future observation for each bootstrap sample and calculate the prediction interval
+boot_predictions <- rnorm(B, boot_means1, boot_sds1)
+pred_int <- predIntNorm(boot_predictions, n.mean = 1, k = 1, method = "Bonferroni",
+            pi.type = "two-sided", conf.level = 0.95)
+print(pred_int)
+
+# CONCLUSION FOR PATIENT 1 TYPE:
+#Mu: 0.423-0.4425
+#Sigma: 0.0911-0.1046. 
+#Prediction interval: [0.2406, 0.6249] = [14.44, 37.49] 
+#Probability that the mean scan duration exceeds the threshold of 25 min is 0.2% (code for this result can be found in type 2 code) 
+#Probability that an individual scan duration exceeds the threshold of 35 min is 5.1% (code for this result can be found in type 2 code)
+
+#We add two histograms that show the frequency of mu and sigma. As the size of each resample 
+#is reasonably large(n=379), the distribution of the sample statistics (!) will be approximately normal because of the CLT. 
+#We see that to fit the density function
+hist(boot_means1, freq = F, main = "Histogram of the mean duration of the scan") 
+curve(dnorm(x, mean(boot_means1), sd(boot_means1)), add =T)
+hist(boot_sds1, freq = F, main = "Histogram of the standard deviation of the duration of the scan") 
+curve(dnorm(x, mean(boot_sds1), sd(boot_sds1)), add =T)
+
+
+# Number of calls/patients ---------------------------------------------------------
+
+#Get the average number of calls per day which corresponds to the lambda parameter in the Poisson (the lambda 
+#also corresponds with the variance). The data 'times' indicates when the patients have CALLED to make 
+#the appointment. Not when they are actually scheduled
+patient1_data$Date <- as.Date(patient1_data$Date)
+# Count the number of calls per day
+call_counts <- table(patient1_data$Date)
+hist(call_counts) # Looks indeed exponential
+
+
+# 95% confidence interval around lambda in the Poisson for the number of calls per day
+# We can assume that the number of calls per day is Poisson distributed, as one can 
+# assume that every call is made by a different patient.
+B <- 999       
+n <- length(call_counts)  
+boot_samples <- replicate(B, rpois(n, mean(call_counts)))
+boot_means2 <- apply(boot_samples, 2, mean)
+ci_lambda <- quantile(boot_means2, c(0.025, 0.975))
+print(ci_lambda)
+
+# Generate a new future observation for each bootstrap sample and calculate the prediction interval
+boot_predictions2 <- rpois(B, boot_means2)
+pred_int2 <- predIntPois(boot_predictions2, conf.level = 0.95)
+print(pred_int2)
+
+# CONCLUSION FOR PATIENT 1 TYPE:
+# lambda: [14.87 ; 18.05] 
+# Prediction interval [9 ; 25] 
+# Probability that the mean number of patients exceeds the threshold of 18 is 2.9% (code for this result can be found in type 2 code)
+# Probability that on a particular day the number of patients exceeds the threshold of 22 is 8.8% (code for this result can be found in type 2 code)
+
+
+
+#We add the histograms that show the frequency of lambda, which corresponds with the mean. 
+hist(boot_means2, freq = F, main = "Histogram of the average number of calls per day") 
+curve(dnorm(x, mean(boot_means2), sd(boot_means2)), add =T)
+
+
+# For the OR part:
+# 95% confidence interval around 1/lambda in the exponential for the time between the calls per day
+names(ci_lambda) <- NULL
+ci_1over_lambda <- c(1/ci_lambda[2], 1/ci_lambda[1]) #Time between calls IN DAYS
+ci_1over_lambda_hours <- ci_1over_lambda*9 #Time between calls IN HOURS taking into account that you can call from 8:00-17:00 (so 9 hours)
+print(ci_1over_lambda_hours*60) #Time between calls IN MINUTES
+
+# Type 2 patient (non-parametric estimation) ----------------------------------------------------------
+
+# Duration ----------------------------------------------------------------
+
+hist(patient2_data[,3])
+ks.test(patient2_data[,3], "pnorm", mean = mean(patient2_data[,3]), sd = sd(patient2_data[,3]))
+# It seems like the sample data is from a normal distribution with mean mean(patient2_data[,3]) and 
+# sd sd(patient2_data[,3]). This sample data is an approximation of the population.
+
+
+# CI for estimator/ quantity of interest 'mean'
+bootstrap_CI <- function(x, B, alpha) {
+n <- length(x)
+X.bar <- mean(x)
+S <- sd(x)
+
+Q.star <- rep(NA, times = B)                            
+
+for (b in 1:B) {
+  J <- sample.int(n, size = n, replace = TRUE)        #'Drawn from EDF'
+  x.star <- x[J]    
+  X.star <- mean(x.star)
+  S.star <- sd(x.star)
+  Q.star[b] <- (X.star - X.bar) / (S.star/sqrt(n))
+}
+
+c.alpha.star <- quantile(Q.star, probs = c(alpha/2, 1-alpha/2))
+upperbound <- X.bar - c.alpha.star[1] * S / sqrt(n)
+lowerbound <- X.bar - c.alpha.star[2] * S / sqrt(n)
+return(c(lower_bound = lowerbound, upper_bound = upperbound))
+}
+bootstrap_CI(patient2_data[,3], 999, 0.05)
+
+# Monte Carlo simulation
+Msim <- 100
+coverage <- 0
+for (i in 1:Msim) {
+  sample <- rnorm(length(patient2_data[,3]), mean = 1, sd = 0.5) #JUST PICK A RANDOM KNOWN(!) DISTRIBUTION WITH KNOWN(!) PARAMETERS
+  ci <- bootstrap_CI(sample, 999, 0.05)
+  if (ci["lower_bound.97.5%"] <= 1 && ci["upper_bound.2.5%"] >= 1) { #Checking whether the bootstrap confidence interval function does its job well
+    coverage <- coverage + 1
+  }
+}
+
+# Calculate coverage probability
+coverage_prob <- coverage / Msim
+print(paste("Coverage Probability:", round(coverage_prob, 3)))
+
+
+
+
+
+
+# Function to calculate the probability that an individual scan duration exceeds the threshold
+bootstrap_prob_threshold <- function(x, B, threshold) {
+  prob_cross <- rep(NA, times = B)
+  n <- length(x)
+  
+  for (b in 1:B) {
+    x_star <- sample(x, size = n, replace = TRUE)
+    # Calculate probability of crossing the threshold in this sample
+    prob_cross[b] <- mean(x_star > threshold)
+  }
+  return(mean(prob_cross))
+}
+
+threshold2D <- 1  # one hour
+B <- 999  # Number of bootstrap samples
+prob_crossing_threshold2D <- bootstrap_prob_threshold(patient2_data[,3], B, threshold2D)
+cat("Estimated Probability of Crossing the Threshold (individual case type 2, duration):", round(prob_crossing_threshold2D, 3), "\n")
+
+#Still for patient 1 duration
+threshold1D <- 0.583333  # 35min
+prob_crossing_threshold1D <- bootstrap_prob_threshold(patient1_data[,3], B, threshold1D)
+cat("Estimated Probability of Crossing the Threshold (individual case type 1, duration):", round(prob_crossing_threshold1D, 3), "\n")
+
+
+
+
+
+
+#Function used to calculate the probability that the (!)mean scan duration(!) will exceed some threshold
+bootstrap_mean <- function(x, B, alpha) {
+  mean_x <- rep(NA, times = B) 
+  n <- length(x)
+  for (b in 1:B) {
+    J <- sample.int(n, size = n, replace = TRUE)        
+    x.star <- x[J]
+    mean_x[b] <- mean(x.star)
+  }
+  return(mean_x)
+}
+
+threshold2DM <- 0.7 #42 min 
+prob_crossing_threshold2DM <- mean(bootstrap_mean(patient2_data[,3], 999, 0.05) > threshold2DM) 
+cat("Estimated Probability of Crossing the Threshold (mean case type 2, duration):", prob_crossing_threshold2DM, "\n")
+
+#Still for patient 1 type
+threshold1DM <- 0.4166666 #25 min 
+prob_crossing_threshold2DM <- mean(bootstrap_mean(patient2_data[,3], 999, 0.05) > threshold2DM) 
+cat("Estimated Probability of Crossing the Threshold (mean case type 1, duration):", prob_crossing_threshold2DM, "\n")
+
+
+
+# CONCLUSION FOR PATIENT 2 TYPE:
+# mean = [0.6464, 0.6943]. So the average duration of the scans of patient 2 will be in between 0.6464*60=38.78min and 0.6943*60=41.66min with 95% certainty.
+# Probability that the mean scan duration exceeds the threshold of 42 min is 0.5% 
+# Probability that an individual scan duration exceeds the threshold of an hour is 5.9%
+
+
+
+# Number of calls ---------------------------------------------------------
+
+patient2_data$Date <- as.Date(patient2_data$Date)
+# Count the number of calls per day
+call_counts2 <- table(patient2_data$Date)
+hist(call_counts2) #No nice distribution
+
+bootstrap_CI(call_counts2, 999, 0.05) #CLT is used to make confidence interval, as it assumed that any sequence of Rvs with some mean and variance < inf will go to a standard normal in limit
+
+# Monte Carlo simulation
+Msim <- 1000
+coverage <- 0
+for (i in 1:Msim) {
+  data <- rnorm(length(call_counts2), mean = 2, sd = 0.5)
+  ci <- bootstrap_CI(data, 999, 0.05)
+  if (ci["lower_bound.97.5%"] <= 2 && ci["upper_bound.2.5%"] >= 2) {
+    coverage <- coverage + 1
+  }
+}
+
+# Calculate coverage probability
+coverage_prob <- coverage / Msim
+print(paste("Coverage Probability:", round(coverage_prob, 3)))
+
+
+
+# Probability that on a particular day the number of patients exceeds the threshold
+threshold2N <- 12
+B <- 999  # Number of bootstrap samples
+prob_crossing_threshold2N <- bootstrap_prob_threshold(call_counts2, B, threshold2N)
+cat("Estimated Probability of Crossing the Threshold (individual case type 2, number):", round(prob_crossing_threshold2N, 3), "\n")
+
+#Still for type 1
+threshold1N <- 22
+B <- 999  # Number of bootstrap samples
+prob_crossing_threshold1N <- bootstrap_prob_threshold(call_counts, B, threshold1N)
+cat("Estimated Probability of Crossing the Threshold (individual case type 1, number):", round(prob_crossing_threshold1N, 3), "\n")
+
+
+
+
+# Probability that the mean number of patients exceeds the threshold
+threshold2NM <- 11 
+# Calculate probability of crossing the threshold 
+prob_crossing_threshold2NM <- mean(bootstrap_mean(call_counts2, 999, 0.05) > threshold2NM) 
+cat("Estimated Probability of Crossing the Threshold (mean case type 2, number):", prob_crossing_threshold2NM, "\n")
+
+# Still for type 1
+threshold1NM <- 18 
+# Calculate probability of crossing the threshold 
+prob_crossing_threshold1NM <- mean(bootstrap_mean(call_counts, 999, 0.05) > threshold1NM) 
+cat("Estimated Probability of Crossing the Threshold (mean case type 1, number):", prob_crossing_threshold1NM, "\n")
+
+
+
+# CONCLUSION FOR PATIENT 2 TYPE:
+# mean = [9.925, 10.920]. So the average number of patients 2 per day will be in between 10 and 11 with 95% certainty.
+# Probability that the mean number of patients exceeds the threshold of 11 is 0.7% 
+# Probability that on a particular day the number of patients exceeds the threshold of 12 is 4.3%
+
+
+
+# Mean inter arrival times Type 2 patient (for OR part)---------------------------------------
+
+patient2_data$Date <- as.Date(patient2_data$Date, format = "%Y-%m-%d")
+patient2_data$Time <- sprintf("%02d:%02d", as.integer(patient2_data$Time), round((patient2_data$Time - as.integer(patient2_data$Time)) * 60))
+patient2_data$DateTime <- as.POSIXct(paste(patient2_data$Date, patient2_data$Time), format = "%Y-%m-%d %H:%M")
+patient2_data <- patient2_data[order(patient2_data$DateTime), ]
+print(patient2_data)
+
+# Calculate inter-arrival times in hours, considering working hours only
+inter_arrival_times <- c()
+for (i in 2:nrow(patient2_data)) {
+  time_diff <- difftime(patient2_data$DateTime[i], patient2_data$DateTime[i-1], units = "hours")
+  date_diff <- as.numeric(difftime(patient2_data$Date[i], patient2_data$Date[i-1], units = "days"))
+  
+  # Adjust for next day calls
+  if (date_diff > 0) {
+    # Calculate time remaining in the previous day
+    end_of_day_prev <- as.POSIXct(paste(patient2_data$Date[i-1], "17:00"), format = "%Y-%m-%d %H:%M")
+    time_remaining_prev_day <- difftime(end_of_day_prev, patient2_data$DateTime[i-1], units = "hours")
+    
+    # Calculate time passed in the current day
+    start_of_day_curr <- as.POSIXct(paste(patient2_data$Date[i], "08:00"), format = "%Y-%m-%d %H:%M")
+    time_passed_curr_day <- difftime(patient2_data$DateTime[i], start_of_day_curr, units = "hours")
+    
+    # Total inter-arrival time considering working hours only
+    time_diff <- time_remaining_prev_day + (date_diff - 1) * 9 + time_passed_curr_day
+  }
+  inter_arrival_times <- c(inter_arrival_times, as.numeric(time_diff))
+}
+
+# Function to calculate bootstrap confidence intervals for the mean
+bootstrap_CI_interarrival <- function(data, B = 999, alpha = 0.05) {
+  boot_samples <- replicate(B, sample(data, length(data), replace = TRUE))
+  boot_means <- apply(boot_samples, 2, mean)
+  ci <- quantile(boot_means, c(alpha / 2, 1 - alpha / 2))
+  return(ci)
+}
+
+ci_interarrival <- bootstrap_CI_interarrival(inter_arrival_times)
+print(ci_interarrival)
+ci_interarrival_minutes <- ci_interarrival * 60
+print(ci_interarrival_minutes)
+

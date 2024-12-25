@@ -372,3 +372,33 @@ print(ci_interarrival)
 ci_interarrival_minutes <- ci_interarrival * 60
 print(ci_interarrival_minutes)
 
+#Graphics#
+
+#1
+hist(boot_means1, freq = F, main = "Histogram of the mean duration of the scan", xlab = "mean") 
+curve(dnorm(x, mean(boot_means1), sd(boot_means1)), add =T)
+abline(v = ci_mu, col = "blue", lwd = 2, lty = 2)
+
+#2
+hist(boot_sds1, freq = F, main = "Histogram of the standard deviation of the duration of the scan", xlab = "standard desviation") 
+curve(dnorm(x, mean(boot_sds1), sd(boot_sds1)), add =T)
+abline(v = ci_sigma, col = "blue", lwd = 2, lty = 2)
+
+#3
+hist(boot_means2, freq = F, main = "Histogram of the average number of calls per day") 
+curve(dnorm(x, mean(boot_means2), sd(boot_means2)), add =T)
+abline(v = ci_lambda, col = "blue", lwd = 2, lty = 2)
+
+#4
+bootstrap_means_duration <- replicate(999, mean(sample(patient2_data[,3], size = length(patient2_data[,3]), replace = TRUE)))
+ci_duration <- quantile(bootstrap_means_duration, probs = c(0.025, 0.975))
+hist(bootstrap_means_duration, freq = FALSE, main = "Histogram of the Mean Scan Duration", xlab = "Mean Scan Duration")
+curve(dnorm(x, mean(bootstrap_means_duration), sd(bootstrap_means_duration)), add = TRUE)
+abline(v = ci_duration, col = "blue", lwd = 2, lty = 2)
+
+#5
+bootstrap_means_calls <- replicate(999, mean(sample(call_counts2, size = length(call_counts2), replace = TRUE)))
+ci_calls <- quantile(bootstrap_means_calls, probs = c(0.025, 0.975))
+hist(bootstrap_means_calls, freq = FALSE, main = "Histogram of the Mean Call Counts", xlab = "Mean Call Counts")
+curve(dnorm(x, mean(bootstrap_means_calls), sd(bootstrap_means_calls)), add = TRUE)
+abline(v = ci_calls, col = "blue", lwd = 2, lty = 2)  

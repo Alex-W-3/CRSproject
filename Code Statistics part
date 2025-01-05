@@ -67,6 +67,8 @@ print(combined_means)
 #Mondaya have on average a little less calls for patient 1 than the rest of the working days
 
 
+
+
 # Type 1 patient (parametric estimation) ----------------------------------------------------------
 
 # Duration (Get the duration parameters in the Normal) ----------------------------------------------------------------
@@ -108,6 +110,7 @@ hist(boot_means1, freq = F, main = "Histogram of the mean duration of the scan")
 curve(dnorm(x, mean(boot_means1), sd(boot_means1)), add =T)
 hist(boot_sds1, freq = F, main = "Histogram of the standard deviation of the duration of the scan") 
 curve(dnorm(x, mean(boot_sds1), sd(boot_sds1)), add =T)
+
 
 
 # Number of calls/patients ---------------------------------------------------------
@@ -155,6 +158,10 @@ names(ci_lambda) <- NULL
 ci_1over_lambda <- c(1/ci_lambda[2], 1/ci_lambda[1]) #Time between calls IN DAYS
 ci_1over_lambda_hours <- ci_1over_lambda*9 #Time between calls IN HOURS taking into account that you can call from 8:00-17:00 (so 9 hours)
 print(ci_1over_lambda_hours*60) #Time between calls IN MINUTES
+
+
+
+
 
 # Type 2 patient (non-parametric estimation) ----------------------------------------------------------
 
@@ -329,6 +336,8 @@ cat("Estimated Probability of Crossing the Threshold (mean case type 1, number):
 
 
 
+
+
 # Mean inter arrival times Type 2 patient (for OR part)---------------------------------------
 
 patient2_data$Date <- as.Date(patient2_data$Date, format = "%Y-%m-%d")
@@ -343,25 +352,34 @@ for (i in 2:nrow(patient2_data)) {
   time_diff <- difftime(patient2_data$DateTime[i], patient2_data$DateTime[i-1], units = "hours")
   date_diff <- as.numeric(difftime(patient2_data$Date[i], patient2_data$Date[i-1], units = "days"))
   
-  # Adjust for next day calls
+  # Check if the interval is from Friday to Monday (assuming working hours 08:00 to 17:00, Monday to Friday)
   if (date_diff > 0) {
-    # Calculate time remaining in the previous day
-    end_of_day_prev <- as.POSIXct(paste(patient2_data$Date[i-1], "17:00"), format = "%Y-%m-%d %H:%M")
-    time_remaining_prev_day <- difftime(end_of_day_prev, patient2_data$DateTime[i-1], units = "hours")
-    
-    # Calculate time passed in the current day
-    start_of_day_curr <- as.POSIXct(paste(patient2_data$Date[i], "08:00"), format = "%Y-%m-%d %H:%M")
-    time_passed_curr_day <- difftime(patient2_data$DateTime[i], start_of_day_curr, units = "hours")
-    
-    # Total inter-arrival time considering working hours only
-    time_diff <- time_remaining_prev_day + (date_diff - 1) * 9 + time_passed_curr_day
+    # Check if the previous date is Friday and the current date is Monday
+    if (weekdays(patient2_data$Date[i-1]) == "vrijdag" && weekdays(patient2_data$Date[i]) == "maandag") {
+      # Set inter-arrival time to 0 for Friday to Monday (weekend gap)
+      time_diff <- 0
+    } else {
+      # Adjust for next day calls (weekday working hours)
+      # Calculate time remaining in the previous day
+      end_of_day_prev <- as.POSIXct(paste(patient2_data$Date[i-1], "17:00"), format = "%Y-%m-%d %H:%M")
+      time_remaining_prev_day <- difftime(end_of_day_prev, patient2_data$DateTime[i-1], units = "hours")
+      
+      # Calculate time passed in the current day
+      start_of_day_curr <- as.POSIXct(paste(patient2_data$Date[i], "08:00"), format = "%Y-%m-%d %H:%M")
+      time_passed_curr_day <- difftime(patient2_data$DateTime[i], start_of_day_curr, units = "hours")
+      
+      # Total inter-arrival time considering working hours only
+      time_diff <- time_remaining_prev_day + (date_diff - 1) * 9 + time_passed_curr_day
+    }
   }
   inter_arrival_times <- c(inter_arrival_times, as.numeric(time_diff))
 }
+print(inter_arrival_times)
 
 # Function to calculate bootstrap confidence intervals for the mean
 bootstrap_CI_interarrival <- function(data, B = 999, alpha = 0.05) {
   boot_samples <- replicate(B, sample(data, length(data), replace = TRUE))
+  hist(boot_samples)
   boot_means <- apply(boot_samples, 2, mean)
   ci <- quantile(boot_means, c(alpha / 2, 1 - alpha / 2))
   return(ci)
@@ -369,10 +387,15 @@ bootstrap_CI_interarrival <- function(data, B = 999, alpha = 0.05) {
 
 ci_interarrival <- bootstrap_CI_interarrival(inter_arrival_times)
 print(ci_interarrival)
+
+# Convert CI to minutes
 ci_interarrival_minutes <- ci_interarrival * 60
 print(ci_interarrival_minutes)
 
-#Graphics#
+
+
+
+#Graphics displayed in the appendix for the statistics part ------------------------
 
 #1
 hist(boot_means1, freq = F, main = "Histogram of the mean duration of the scan", xlab = "mean") 

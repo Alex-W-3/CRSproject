@@ -1,7 +1,13 @@
 rm(list=ls())
-library(dplyr)
 #install.packages("EnvStats")
+#install.packages("MASS")
+#install.packages("fitdistrplus")
+library(fitdistrplus)
+library(dplyr)
+library(MASS)
 library(EnvStats)
+library(tseries)
+
 data <- read.csv("C:/Users/alexw/Downloads/ScanRecords.csv")
 
 # Get data seperated for type 1 and type 2 patients -----------------------
@@ -162,15 +168,20 @@ print(ci_1over_lambda_hours*60) #Time between calls IN MINUTES
 
 
 
-
 # Type 2 patient (non-parametric estimation) ----------------------------------------------------------
 
 # Duration ----------------------------------------------------------------
 
-hist(patient2_data[,3])
-ks.test(patient2_data[,3], "pnorm", mean = mean(patient2_data[,3]), sd = sd(patient2_data[,3]))
-# It seems like the sample data is from a normal distribution with mean mean(patient2_data[,3]) and 
-# sd sd(patient2_data[,3]). This sample data is an approximation of the population.
+#Get gamma distribution parameters from the sample data
+fit <- fitdistr(patient2_data[,3], "gamma")
+shape <- fit$estimate["shape"] 
+rate <- fit$estimate["rate"]
+
+# Create the histogram of the sample which is an approximation for the population, with normal and gamma lines included
+hist(patient2_data[,3], prob = TRUE, col = "lightblue",border = "black",xlab = "Values", main = "Histogram duration data type 2")  
+x <- seq(min(patient2_data[,3]), max(patient2_data[,3]), length = 1000)
+lines(x, dnorm(x, mean = mean(patient2_data[,3]), sd = sd(patient2_data[,3])), col = "red", lwd = 2) 
+lines(x, dgamma(x, shape = shape, rate = rate), col = "green", lwd =2)
 
 
 # CI for estimator/ quantity of interest 'mean'
@@ -179,15 +190,37 @@ n <- length(x)
 X.bar <- mean(x)
 S <- sd(x)
 
-Q.star <- rep(NA, times = B)                            
-
+Q.star <- rep(NA, times = B)
+x.star <- matrix(nrow = B, ncol = n)
 for (b in 1:B) {
   J <- sample.int(n, size = n, replace = TRUE)        #'Drawn from EDF'
-  x.star <- x[J]    
-  X.star <- mean(x.star)
-  S.star <- sd(x.star)
+  x.star[b,] <- x[J]    
+  X.star <- mean(x.star[b,])
+  S.star <- sd(x.star[b,])
   Q.star[b] <- (X.star - X.bar) / (S.star/sqrt(n))
 }
+# # Flatten bootstrap samples into a vector
+# x.star_flat <- as.vector(x.star)
+# 
+# # Plot histogram
+# hist(x.star_flat, probability = TRUE, 
+#      main = "Histogram with Gamma Distribution Fit (Mean = 0.67)",
+#      xlab = "Values from All Resampled Datasets", 
+#      col = "skyblue", border = "white", breaks = 30)
+# 
+# # Estimate Gamma shape parameter with fixed mean
+# mean_fixed <- 0.67
+# var_sample <- var(x.star_flat)
+# 
+# # Calculate shape and rate
+# shape_est <- mean_fixed^2 / var_sample
+# rate_est <- mean_fixed / var_sample
+# print(shape_est)
+# print(rate_est)
+# # Overlay Gamma curve
+# curve(dgamma(x, shape = shape_est, rate = rate_est), 
+#       col = "red", lwd = 2, add = TRUE)
+
 
 c.alpha.star <- quantile(Q.star, probs = c(alpha/2, 1-alpha/2))
 upperbound <- X.bar - c.alpha.star[1] * S / sqrt(n)
@@ -195,6 +228,7 @@ lowerbound <- X.bar - c.alpha.star[2] * S / sqrt(n)
 return(c(lower_bound = lowerbound, upper_bound = upperbound))
 }
 bootstrap_CI(patient2_data[,3], 999, 0.05)
+
 
 # Monte Carlo simulation
 Msim <- 100
@@ -210,9 +244,6 @@ for (i in 1:Msim) {
 # Calculate coverage probability
 coverage_prob <- coverage / Msim
 print(paste("Coverage Probability:", round(coverage_prob, 3)))
-
-
-
 
 
 
@@ -339,25 +370,35 @@ cat("Estimated Probability of Crossing the Threshold (mean case type 1, number):
 
 
 # Mean inter arrival times Type 2 patient (for OR part)---------------------------------------
-
 patient2_data$Date <- as.Date(patient2_data$Date, format = "%Y-%m-%d")
 patient2_data$Time <- sprintf("%02d:%02d", as.integer(patient2_data$Time), round((patient2_data$Time - as.integer(patient2_data$Time)) * 60))
 patient2_data$DateTime <- as.POSIXct(paste(patient2_data$Date, patient2_data$Time), format = "%Y-%m-%d %H:%M")
 patient2_data <- patient2_data[order(patient2_data$DateTime), ]
 print(patient2_data)
 
-# Calculate inter-arrival times in hours, considering working hours only
 inter_arrival_times <- c()
 for (i in 2:nrow(patient2_data)) {
   time_diff <- difftime(patient2_data$DateTime[i], patient2_data$DateTime[i-1], units = "hours")
   date_diff <- as.numeric(difftime(patient2_data$Date[i], patient2_data$Date[i-1], units = "days"))
   
-  # Check if the interval is from Friday to Monday (assuming working hours 08:00 to 17:00, Monday to Friday)
+  # Check if the interval spans multiple days
   if (date_diff > 0) {
     # Check if the previous date is Friday and the current date is Monday
     if (weekdays(patient2_data$Date[i-1]) == "vrijdag" && weekdays(patient2_data$Date[i]) == "maandag") {
-      # Set inter-arrival time to 0 for Friday to Monday (weekend gap)
-      time_diff <- 0
+      # Set inter-arrival time to account for working hours
+      friday_time <- as.POSIXlt(patient2_data$DateTime[i-1])$hour * 60 + as.POSIXlt(patient2_data$DateTime[i-1])$min
+      monday_time <- as.POSIXlt(patient2_data$DateTime[i])$hour * 60 + as.POSIXlt(patient2_data$DateTime[i])$min
+      
+      # Define working hours boundaries in minutes
+      closing_hour <- 17 * 60  # 17:00 in minutes
+      opening_hour <- 8 * 60   # 08:00 in minutes
+      
+      # Calculate Friday remaining minutes and Monday initial minutes
+      friday_remaining <- closing_hour - friday_time
+      monday_initial <- monday_time - opening_hour
+      
+      # Total inter-arrival time in hours
+      time_diff <- (friday_remaining + monday_initial) / 60
     } else {
       # Adjust for next day calls (weekday working hours)
       # Calculate time remaining in the previous day
@@ -376,6 +417,33 @@ for (i in 2:nrow(patient2_data)) {
 }
 print(inter_arrival_times)
 
+
+#Get gamma distribution parameters to the data
+fit <- fitdistr(inter_arrival_times, "gamma")
+shape <- fit$estimate["shape"] 
+rate <- fit$estimate["rate"]
+
+# Fit a log-normal distribution to the data 
+fit_lognormal <- fitdistr(inter_arrival_times, "lognormal") 
+meanlog <- fit_lognormal$estimate["meanlog"] 
+sdlog <- fit_lognormal$estimate["sdlog"] 
+
+# Fit a Weibull distribution to the data
+fit_weibull <- fitdistr(inter_arrival_times, "weibull")
+shape_weibull <- fit_weibull$estimate["shape"]
+scale_weibull <- fit_weibull$estimate["scale"]
+
+# Plot the histogram and the fitted distributions
+hist(inter_arrival_times, prob = TRUE, col = "lightblue", border = "black", xlab = "Values", main = "Histogram inter-arrival time type 2")
+x <- seq(min(inter_arrival_times), max(inter_arrival_times), length = 1000)
+lines(x, dnorm(x, mean = mean(inter_arrival_times), sd = sd(inter_arrival_times)), col = "red", lwd = 2)
+lines(x, dgamma(x, shape = shape, rate = rate), col = "green", lwd = 2)
+lines(x, dlnorm(x, meanlog = meanlog, sdlog = sdlog), col = "blue", lwd = 2)
+lines(x, dweibull(x, shape = shape_weibull, scale = scale_weibull), col = "purple", lwd = 2)
+sd(inter_arrival_times)
+
+jarque.bera.test(inter_arrival_times)
+
 # Function to calculate bootstrap confidence intervals for the mean
 bootstrap_CI_interarrival <- function(data, B = 999, alpha = 0.05) {
   boot_samples <- replicate(B, sample(data, length(data), replace = TRUE))
@@ -392,36 +460,3 @@ print(ci_interarrival)
 ci_interarrival_minutes <- ci_interarrival * 60
 print(ci_interarrival_minutes)
 
-
-
-
-#Graphics displayed in the appendix for the statistics part ------------------------
-
-#1
-hist(boot_means1, freq = F, main = "Histogram of the mean duration of the scan", xlab = "mean") 
-curve(dnorm(x, mean(boot_means1), sd(boot_means1)), add =T)
-abline(v = ci_mu, col = "blue", lwd = 2, lty = 2)
-
-#2
-hist(boot_sds1, freq = F, main = "Histogram of the standard deviation of the duration of the scan", xlab = "standard desviation") 
-curve(dnorm(x, mean(boot_sds1), sd(boot_sds1)), add =T)
-abline(v = ci_sigma, col = "blue", lwd = 2, lty = 2)
-
-#3
-hist(boot_means2, freq = F, main = "Histogram of the average number of calls per day") 
-curve(dnorm(x, mean(boot_means2), sd(boot_means2)), add =T)
-abline(v = ci_lambda, col = "blue", lwd = 2, lty = 2)
-
-#4
-bootstrap_means_duration <- replicate(999, mean(sample(patient2_data[,3], size = length(patient2_data[,3]), replace = TRUE)))
-ci_duration <- quantile(bootstrap_means_duration, probs = c(0.025, 0.975))
-hist(bootstrap_means_duration, freq = FALSE, main = "Histogram of the Mean Scan Duration", xlab = "Mean Scan Duration")
-curve(dnorm(x, mean(bootstrap_means_duration), sd(bootstrap_means_duration)), add = TRUE)
-abline(v = ci_duration, col = "blue", lwd = 2, lty = 2)
-
-#5
-bootstrap_means_calls <- replicate(999, mean(sample(call_counts2, size = length(call_counts2), replace = TRUE)))
-ci_calls <- quantile(bootstrap_means_calls, probs = c(0.025, 0.975))
-hist(bootstrap_means_calls, freq = FALSE, main = "Histogram of the Mean Call Counts", xlab = "Mean Call Counts")
-curve(dnorm(x, mean(bootstrap_means_calls), sd(bootstrap_means_calls)), add = TRUE)
-abline(v = ci_calls, col = "blue", lwd = 2, lty = 2)  
